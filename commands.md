@@ -187,6 +187,71 @@ Set-NetFirewallProfile -Profile Domain,Private,Public -DefaultInboundAction Bloc
 
 ---
 
+## 4a. simplewall
+
+simplewall is a free third-party firewall. It is **not** a front end for Windows Firewall. It configures the Windows Filtering Platform directly and runs independently alongside Windows Firewall. If either one blocks a connection, it is blocked, so check both when a service breaks. Keep Windows Firewall on as a second layer.
+
+How it behaves:
+
+- It blocks all apps by default (whitelist style), so you allow only what is needed.
+- Its filters stay active even after simplewall is closed. Use the **Disable filters** button to remove them.
+- Rules can be permanent or temporary. Temporary rules reset at the next reboot, which is a useful safety net while you learn.
+- Custom rules are **global** (all apps) or **special** (chosen apps, set on the rule's Apps tab).
+
+Workflow:
+
+1. Finish backups and list each scored service's ports and programs first.
+2. Open simplewall but do not enable filters yet. Create your allow rules first.
+3. Prefer temporary rules while learning.
+4. Enable filters, then test every service from another machine after each rule.
+5. Know your rollback before you start: Disable filters, or reboot if rules are temporary.
+
+**CHANGES SYSTEM, HIGH RISK.** Command-line options (run from the folder containing simplewall.exe). Enabling filters with no allow rules can cut off RDP, DNS, and the scoring checks immediately.
+
+```powershell
+.\simplewall.exe -install -temp
+.\simplewall.exe -install
+.\simplewall.exe -uninstall
+```
+
+- `-install -temp` enables filtering until reboot.
+- `-install` enables filtering.
+- `-uninstall` removes all filters simplewall installed.
+
+**READ-ONLY.** Dump the WFP filters and state to inspect what is actually active (writes files to the current folder):
+
+```powershell
+netsh wfp show filters
+netsh wfp show state
+```
+
+### What to allow, by machine role
+
+Use only the rows for your machine. Services run by the System process (IIS, SMB) are likely easier to allow with a port-based rule than a per-program rule. Verify this in your lab.
+
+| Service | Inbound allow | Notes |
+|---|---|---|
+| IIS | TCP 80 (443 if HTTPS is scored) | |
+| SMB / file shares | TCP 445 | 139 is legacy, skip unless needed |
+| DNS server | TCP and UDP 53 | |
+| MySQL | TCP 3306 | Limit to the web server IP if possible |
+| RDP | TCP 3389 | Only if needed, ideally from specific IPs |
+| Domain controller | 53, 88, 135, 389, 445, 464, 636, 3268/3269, dynamic RPC | Get the exact list from your team first |
+
+Outbound, allow only what the machine starts itself:
+
+- DNS (53) to your DNS server, and DHCP if used
+- NTP (123) for time sync, which matters for AD
+- Web server to the database host on 3306
+- Domain members to the DC (the AD ports above)
+- Windows Update, only if allowed and safe
+
+The firewall is stateful, so replies to connections you allowed inbound need no separate outbound rule.
+
+Ask your team for their exact simplewall setup and copy it. Practice in your lab until you can enable, test, and disable it quickly.
+
+---
+
 ## 5. Shares and SMB hardening
 
 **CHANGES SYSTEM**. Disable SMBv1 only if nothing needs it.
@@ -271,6 +336,52 @@ IFEO (image hijack) check. Look for Debugger values (for example sethc.exe point
 ```powershell
 $k = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"
 Get-ItemProperty "$k\Image File Execution Options\*" | Where Debugger
+```
+
+---
+
+## 9a. Autoruns (Sysinternals)
+
+Autoruns lists nearly everything that runs at startup or logon. It does not show everything, so use it alongside Task Scheduler, services, and Process Explorer.
+
+**Get it:** download from the Microsoft Sysinternals site, or use a tools folder your team provides. Ask your coach whether downloads and internet are allowed. Use `autoruns64.exe` (GUI) and `autorunsc64.exe` (command line, good for Server Core). Run as administrator or some entries will be missing.
+
+### GUI workflow
+
+1. Save a baseline early: File > Save. Later use File > Compare to see only new entries (shown in green).
+2. Start on the **Everything** tab, then check **Logon**, **Services**, **Scheduled Tasks**, **Drivers**, **Image Hijacks**, **WMI**, **Winlogon**, **AppInit**, and **Boot Execute**.
+3. Options > Scan Options > turn on **Verify code signatures**. **Check VirusTotal.com** sends file hashes to the internet, so use it only if you have internet and it is allowed.
+4. Investigate every highlighted row:
+   - Pink: no publisher or an invalid signature.
+   - Yellow: the entry exists but its file is missing.
+   - Green: new since your saved baseline.
+   - Red detection counts in the VirusTotal column are bad.
+5. Click an entry to see its path, publisher, and command line in the bottom pane. Right-click for Jump to Entry (registry location), Jump to Image (file location), Properties, and Search Online.
+6. **Disable before deleting.** Uncheck an entry to disable it (reversible), then re-test your scored services. Delete it only once you are confident it is malicious.
+7. Press F5 to refresh regularly, because attackers re-add persistence.
+
+### What looks suspicious
+
+- No publisher, random file names, or files in Temp, AppData, ProgramData, Public, or Users folders.
+- Script files (.ps1, .vbs, .bat) or encoded PowerShell commands.
+- `cmd.exe`, `powershell.exe`, `mshta.exe`, `rundll32.exe`, or `wscript.exe` with odd arguments.
+- Image Hijacks (IFEO) entries, such as sethc.exe pointing to cmd.exe. Delete these.
+- Drivers you do not recognize.
+
+Hide Microsoft Entries reduces noise, but attackers abuse signed Windows programs, so also look at the full list. Never remove entries for scored services (IIS, MySQL, DNS, and so on). If you find a malicious signed file, check its certificate and see whether other files use it.
+
+### Command line (autorunsc)
+
+**READ-ONLY** for the system (it writes one output file). Saves a CSV of non-Microsoft entries with file hashes and signature checks. Run it again later and compare the two files. Going through cmd avoids PowerShell's output encoding problem.
+
+```powershell
+cmd /c "autorunsc64.exe -accepteula -a * -c -h -s -m -nobanner > C:\backup\autoruns.csv"
+```
+
+Compare two saved runs:
+
+```powershell
+Compare-Object (Get-Content C:\backup\autoruns.csv) (Get-Content C:\backup\autoruns-later.csv)
 ```
 
 ---

@@ -80,6 +80,31 @@
   \item Forensics: \textbf{ShellBags Viewer} shows folder view settings stored in the registry
 \end{mycheck}
 
+\section*{3a. Using Autoruns (Sysinternals)}
+\textit{Autoruns lists nearly everything that runs at startup or logon. It does not show everything, so use it with Task Scheduler, services, and Process Explorer.}
+\begin{mycheck}
+  \item \textbf{Get it:} download from the Microsoft Sysinternals site, or use a tools folder your team provides. Ask your coach whether downloads and internet are allowed. Use \cmd{autoruns64.exe} (GUI) and \cmd{autorunsc64.exe} (command line, good for Server Core)
+  \item \textbf{Run as administrator} (right-click, Run as administrator), or some entries will be missing. Accept the license prompt
+  \item \textbf{Save a baseline first:} File $>$ Save, early on a clean-looking machine. Later use File $>$ Compare to see only \textbf{new} entries (shown in green)
+  \item Start on the \textbf{Everything} tab, then check these tabs: \textbf{Logon}, \textbf{Services}, \textbf{Scheduled Tasks}, \textbf{Drivers}, \textbf{Image Hijacks}, \textbf{WMI}, \textbf{Winlogon}, \textbf{AppInit}, \textbf{Boot Execute}
+  \item Turn on Options $>$ Scan Options $>$ \textbf{Verify code signatures}. \textbf{Check VirusTotal.com} sends file hashes to the internet, so use it only if you have internet and it is allowed
+  \item \textbf{Colors:} pink means no publisher or an invalid signature; yellow means the entry exists but its file is missing; green means new since your saved baseline. With VirusTotal enabled, red detection counts are bad. Your team's ``red is bad'' refers to these suspicious highlights, so investigate every highlighted row
+  \item \textbf{Hide Microsoft Entries} reduces noise, but attackers abuse signed Windows programs. Also look at the full list for \cmd{cmd.exe}, \cmd{powershell.exe}, \cmd{mshta.exe}, \cmd{rundll32.exe}, or \cmd{wscript.exe} with odd arguments, or entries pointing to Temp, AppData, ProgramData, Public, or Users folders
+  \item \textbf{Suspicious signs:} no publisher, random file names, script files (.ps1, .vbs, .bat), encoded PowerShell commands, files in odd folders, drivers you do not recognize
+  \item Click an entry to see its path, publisher, and command line in the bottom pane. Right-click for \textbf{Jump to Entry} (registry location), \textbf{Jump to Image} (file location), \textbf{Properties}, and \textbf{Search Online}
+  \item \textbf{Disable before deleting:} uncheck an entry to disable it (reversible), then re-test your scored services. Delete it only once you are confident it is malicious. Never remove entries for scored services (IIS, MySQL, DNS, and so on)
+  \item Delete \textbf{Image Hijacks} (IFEO) entries pointing to \cmd{cmd.exe} or other programs
+  \item If you find a malicious signed file, check the certificate and see whether other files use it. Cross-check with Task Scheduler, \cmd{Get-Service}, and Process Explorer
+  \item Re-run Autoruns (F5 to refresh) regularly; attackers re-add persistence
+  \item Log what you found: entry name, location, path, and what you did
+\end{mycheck}
+{\footnotesize
+\begin{verbatim}
+cmd /c "autorunsc64.exe -accepteula -a * -c -h -s -m -nobanner > C:\backup\autoruns.csv"
+\end{verbatim}
+}
+\noindent The command above saves a CSV of non-Microsoft entries with file hashes and signature checks. Run it again later and compare the files.
+
 \section*{4. Firewall and Shares}
 \begin{mycheck}
   \item Open \cmd{wf.msc} (Windows Defender Firewall with Advanced Security; built on the Windows Filtering Platform). Confirm it is on for all profiles: \cmd{Get-NetFirewallProfile}
@@ -87,7 +112,20 @@
   \item Remember: connections that do not match an allow rule are blocked, so apps like Firefox need an outbound program rule (New Rule $\rightarrow$ Program $\rightarrow$ path to the .exe)
   \item Allow only required inbound ports (e.g., 80 for IIS, 445 for SMB)
   \item Use predefined rules (e.g., RDP) and tighten them in Properties, such as limiting remote IPs; or use \cmd{New-NetFirewallRule}
-  \item \textbf{SimpleWall} is a free third-party firewall that does not kill RDP sessions
+  \item \textbf{simplewall} (free, third party) is \emph{not} a front end for Windows Firewall; it configures the Windows Filtering Platform directly and runs independently alongside it. If either firewall blocks a connection, it is blocked, so check \textbf{both} when a service breaks. Keep Windows Firewall on as a second layer
+  \item simplewall is whitelist-style: it blocks all apps by default, so you allow only what is needed. Its filters stay active even after simplewall is closed; the \textbf{Disable filters} button removes them
+  \item \textbf{simplewall workflow:}
+  \begin{itemize}[itemsep=1pt, topsep=1pt]
+    \item Finish backups and list each scored service's ports and programs first (Section 7 baseline)
+    \item Open simplewall but \textbf{do not enable filters yet}; create your allow rules first
+    \item Prefer \textbf{temporary} rules while learning (reset on reboot), or \cmd{simplewall.exe -install -temp}
+    \item Enable filters, then test every service from another machine after each rule
+    \item Know your rollback before you start: Disable filters, or reboot if rules are temporary
+  \end{itemize}
+  \item Custom rules are \textbf{global} (all apps) or \textbf{special} (chosen apps, set on the rule's Apps tab). Services run by the System process (IIS, SMB) are likely easier to allow with a \textbf{port-based} rule than a per-program rule; verify this in your lab
+  \item \textbf{Inbound allow, by machine role:} IIS TCP 80 (443 if HTTPS is scored); SMB TCP 445; DNS TCP and UDP 53; MySQL TCP 3306 (limit to the web server IP if possible); RDP TCP 3389 only if needed, ideally from specific IPs; domain controller needs many AD ports (53, 88, 135, 389, 445, 464, 636, 3268/3269, dynamic RPC), so get the exact list from your team first
+  \item \textbf{Outbound allow, only what the machine starts itself:} DNS (53) to your DNS server; DHCP if used; NTP (123) for AD time; web server to MySQL on 3306; domain members to the DC; Windows Update only if allowed and safe. Replies to allowed inbound connections need no extra rule
+  \item Ask your team for their exact simplewall setup and copy it; practice in your lab until you can enable, test, and disable it quickly
   \item A \textbf{share} is a folder other machines reach over SMB (port 445), e.g., \cmd{\textbackslash\textbackslash SERVER\textbackslash Docs}; the scoring engine may test it. List shares with \cmd{Get-SmbShare} or \cmd{fsmgmt.msc} (check Name and Path; ignore hidden defaults C\$, ADMIN\$, IPC\$)
   \item Remove unneeded shares and check share and NTFS permissions; \textbf{never share the C: drive}
   \item Keep your backup folder (\cmd{C:\textbackslash backup}) \textbf{unshared} and outside \cmd{inetpub}
