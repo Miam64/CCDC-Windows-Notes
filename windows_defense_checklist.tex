@@ -1,0 +1,317 @@
+\documentclass[11pt]{article}
+\usepackage[margin=0.9in]{geometry}
+\usepackage{enumitem}
+\usepackage{amssymb}
+\usepackage{xcolor}
+\usepackage[T1]{fontenc}
+\usepackage{titlesec}
+
+\definecolor{accent}{HTML}{4B2E83}
+\titleformat{\section}{\large\bfseries\color{accent}}{}{0em}{}[\titlerule]
+\titlespacing*{\section}{0pt}{10pt}{5pt}
+
+\newcommand{\cmd}[1]{\texttt{\small #1}}
+\newlist{mycheck}{itemize}{1}
+\setlist[mycheck]{label=$\square$, leftmargin=1.6em, itemsep=2pt, topsep=3pt}
+
+\pagestyle{empty}
+
+\begin{document}
+
+{\LARGE\bfseries\color{accent} Windows Defense Checklist}\\[2pt]
+{\large CCDC Tryout Prep \textbullet{} Windows Client and Server}\\[2pt]
+\textit{Rule of thumb: before you disable or change anything, ask ``could a scored service depend on this?'' Back it up first, and write down every change and why.}
+
+\section*{0. First Five Minutes}
+\begin{mycheck}
+  \item Read the scenario and any README or rules fully; note which services must stay up
+  \item Open a notes file and log each change with a timestamp (tryouts also evaluate communication)
+  \item Identify the OS version, hostname, and role (client, member server, domain controller, IIS, file server, database)
+  \item Take a snapshot or backup before major changes, if allowed
+  \item \textbf{Back up services before touching them} (full commands in the appendix). Create \cmd{C:\textbackslash backup} first, outside any share and outside \cmd{inetpub}
+  \begin{itemize}[itemsep=1pt, topsep=1pt]
+    \item \textbf{Shares:} run \cmd{Get-SmbShare}, note each Name and Path (ignore hidden defaults like C\$, ADMIN\$, IPC\$), zip each shared folder, and export share names and permissions to CSV
+    \item \textbf{IIS:} copy \cmd{C:\textbackslash inetpub} (no space in the path) and run \cmd{Backup-WebConfiguration}
+    \item \textbf{MySQL:} find \cmd{mysqldump.exe} (often not in PATH) and dump with \cmd{--result-file}
+  \end{itemize}
+  \item Practice a restore at least once in your lab; a backup you have never restored is a guess
+\end{mycheck}
+
+\section*{1. Accounts and Passwords}
+\begin{mycheck}
+  \item Change default and weak passwords (Administrator and any service accounts); for unauthorized users, just change the password
+  \item Ask your team how to handle scoring service accounts before changing them
+  \item Review accounts and groups in \cmd{lusrmgr.msc}; only needed service accounts and authorized users should exist
+  \item List local users: \cmd{Get-LocalUser}
+  \item List Administrators group: \cmd{Get-LocalGroupMember Administrators}
+  \item Accounts should only be in groups they are authorized for
+  \item On a DC, review Domain Admins, Enterprise Admins, Schema Admins: \cmd{Get-ADGroupMember "Domain Admins"}
+  \item Disable Guest and the default Administrator account if not needed
+  \item Make sure passwords expire; check for accounts with ``never expires'' or ``no password required''
+  \item Set password and lockout policy (\cmd{secpol.msc}, \cmd{gpmc.msc}, or a PowerShell script)
+  \item Remember domain logins use \cmd{DOMAIN\textbackslash user}: the part before the backslash is what you are signing into
+\end{mycheck}
+
+\section*{2. Processes, Services, and Network}
+\begin{mycheck}
+  \item Review running processes: \cmd{Get-Process}, \textbf{Process Explorer} (check parent/child chains and injected DLLs)
+  \item Use \textbf{Process Monitor} for real-time file, registry, and process activity
+  \item List services and startup types: \cmd{Get-Service}; manage with \cmd{sc} (create, delete, stop, start, configure)
+  \item Check \textbf{Server Manager} (\cmd{servermanager.exe}) for service status and best-practice warnings
+  \item Identify which services are scored before stopping anything
+  \item Stop and disable clearly unneeded services (e.g., unused remote access tools)
+  \item List listening ports: \cmd{Get-NetTCPConnection -State Listen}; map each port to a process
+  \item Run \textbf{TCPView} (Sysinternals) to see live connections per process; watch for odd outbound connections
+  \item Use \textbf{Everything} (run as admin) and search \cmd{*.exe} to find unexpected executables
+\end{mycheck}
+
+\section*{3. Persistence}
+\begin{mycheck}
+  \item Run \textbf{Autoruns} (Sysinternals); review Logon, Services, Scheduled Tasks, and Drivers tabs. Red entries are suspicious, but Autoruns does not show everything
+  \item Check \textbf{Task Scheduler} / \cmd{Get-ScheduledTask} for attacker-created tasks
+  \item Check for \textbf{IFEO (image hijacks)}: look for \cmd{Debugger} values under the Image File Execution Options registry key (e.g., sethc.exe replaced with cmd.exe); delete them
+  \item Check \textbf{PowerShell profiles} (\cmd{profile.ps1}); they run every time PowerShell opens. If a command mysteriously fails, an alias may be set to null or to something malicious
+  \item Check startup folders and Run/RunOnce registry keys (HKLM and HKCU)
+  \item Look for unexpected WMI subscriptions and new services
+  \item Check the \textbf{root certificate store} for planted certificates; if you find a malicious cert, see whether other malware uses it
+  \item Remember attackers abuse signed Windows services or sign their own binaries, so ``signed'' does not mean safe
+  \item Check \cmd{appwiz.cpl} for unwanted software; in File Explorer enable View $>$ Show $>$ Hidden items and File name extensions
+  \item Look for unknown files in user profiles, Temp, and ProgramData
+  \item Forensics: \textbf{ShellBags Viewer} shows folder view settings stored in the registry
+\end{mycheck}
+
+\section*{4. Firewall and Shares}
+\begin{mycheck}
+  \item Open \cmd{wf.msc} (Windows Defender Firewall with Advanced Security; built on the Windows Filtering Platform). Confirm it is on for all profiles: \cmd{Get-NetFirewallProfile}
+  \item Typical approach: delete default rules, add only what is needed, set default inbound and outbound to block. \textbf{Do this only after} you have listed what the scored services require (Section 7)
+  \item Remember: connections that do not match an allow rule are blocked, so apps like Firefox need an outbound program rule (New Rule $\rightarrow$ Program $\rightarrow$ path to the .exe)
+  \item Allow only required inbound ports (e.g., 80 for IIS, 445 for SMB)
+  \item Use predefined rules (e.g., RDP) and tighten them in Properties, such as limiting remote IPs; or use \cmd{New-NetFirewallRule}
+  \item \textbf{SimpleWall} is a free third-party firewall that does not kill RDP sessions
+  \item A \textbf{share} is a folder other machines reach over SMB (port 445), e.g., \cmd{\textbackslash\textbackslash SERVER\textbackslash Docs}; the scoring engine may test it. List shares with \cmd{Get-SmbShare} or \cmd{fsmgmt.msc} (check Name and Path; ignore hidden defaults C\$, ADMIN\$, IPC\$)
+  \item Remove unneeded shares and check share and NTFS permissions; \textbf{never share the C: drive}
+  \item Keep your backup folder (\cmd{C:\textbackslash backup}) \textbf{unshared} and outside \cmd{inetpub}
+  \item If a share is deleted, recreate it with \cmd{New-SmbShare -Name Docs -Path C:\textbackslash Shares\textbackslash Docs} and restore permissions from your exported CSV
+  \item Restrict or disable RDP unless required; require NLA if kept
+  \item Disable SMBv1 if not needed
+\end{mycheck}
+
+\section*{5. Active Directory, DNS, and Group Policy (Servers)}
+\begin{mycheck}
+  \item Verify AD, DNS, and DHCP services are healthy and responding
+  \item Check \cmd{dnsmgmt.msc} for unexpected records; DNS is a very common place for competition breaks
+  \item Review GPOs in \cmd{gpmc.msc} (domain) or \cmd{gpedit.msc} (single computer) for suspicious or recently changed settings
+  \item Check for unexpected delegated permissions and new OUs or GPO links
+  \item Confirm domain-joined machines can still authenticate after changes
+  \item Know how to manage \textbf{Server Core} (no GUI) with PowerShell and \cmd{sconfig}
+\end{mycheck}
+
+\section*{6. Web and Application Services (IIS, MySQL)}
+\begin{mycheck}
+  \item Open IIS Manager (\cmd{inetmgr}); review sites, bindings, application pools, and server certificates/SSL settings
+  \item IIS breaks easily: check \textbf{bindings}, \textbf{handler mappings}, \textbf{read permissions} on site files, and the inbound firewall rule for 0.0.0.0:80
+  \item Look for unexpected files in web roots (\cmd{C:\textbackslash inetpub}), including web shells
+  \item Remove default or sample content; disable directory browsing
+  \item MySQL: back up with \cmd{mysqldump}; check users and remote access
+  \item When something breaks, check in order: the service, firewall, permissions, bindings/config, then DNS
+\end{mycheck}
+
+\section*{7. Keeping Services Up (First 2 Hours)}
+\textit{Goal: keep every scored service running and fix what breaks. Change low-risk things first (passwords, firewall cleanup); hold off on risky hardening until you know what is scored.}
+\begin{mycheck}
+  \item Get the list of scored services and which machine hosts each one
+  \item Record a baseline: listening ports per service (\cmd{Get-NetTCPConnection -State Listen}) and the firewall rules each one needs
+  \item Test every service from \textbf{another machine}, the way the scoring engine sees it: \cmd{Test-NetConnection HOST -Port 80}
+  \item \textbf{Troubleshooting order, every time:} (1) service running? (2) listening on the right port? (3) firewall allows it? (4) file/account permissions? (5) config and bindings? (6) DNS resolving?
+  \item \textbf{IIS:} site and app pool started; bindings (IP, port, hostname); handler mappings; read permissions on the site folder; authentication and default document; inbound rule for port 80
+  \item \textbf{SMB:} Server service running; share still exists (\cmd{Get-SmbShare}); share and NTFS permissions; port 445 open
+  \item \textbf{MySQL:} service running and listening on 3306; firewall; user accounts and grants; restore from your dump if data was dropped
+  \item \textbf{DNS:} zones and A records correct in \cmd{dnsmgmt.msc}; forwarders; test with \cmd{Resolve-DnsName} or \cmd{nslookup}
+  \item \textbf{Active Directory:} run \cmd{dcdiag}; DNS healthy (AD depends on it); system time correct; NTDS and Netlogon services running
+  \item Find what changed before blindly fixing: Event Viewer, Task Scheduler, GPOs, recently modified files
+  \item Make \textbf{one change at a time} and re-test after each
+  \item Restore the service first, then investigate. If something malicious is causing the break, fix that cause too
+  \item Log every break: what broke, the cause, the fix (injects often want a written report)
+\end{mycheck}
+
+\section*{8. Updates, Logging, and Cleanup}
+\begin{mycheck}
+  \item Ensure Windows Defender Antivirus is on and definitions are current (separate from the firewall)
+  \item Install critical updates when allowed and safe for scored services
+  \item Enable auditing for logons, account changes, and process creation
+  \item Review Event Viewer (\cmd{eventvwr.msc}): Security (\textbf{4624 successful login}, \textbf{4625 failed login}, 4720, 4732), System, Application, PowerShell logs
+  \item A flood of 4625 events suggests brute force; unexpected 4624 events suggest a compromised account
+  \item Remove unneeded software and tools
+  \item Advanced: enable \textbf{PPL} (Protected Process Light) for LSASS via registry so DLLs cannot be injected
+  \item Be careful in the registry (\cmd{regedit}); one wrong key can break a lot. Advanced system settings: \cmd{sysdm.cpl}
+\end{mycheck}
+
+\section*{9. Verify and Document}
+\begin{mycheck}
+  \item Re-test every scored service after your changes
+  \item Re-check for new accounts, tasks, and connections (attackers return, especially in the second half facing the red team)
+  \item Finish your change log: what, why, when
+  \item Be ready to explain your reasoning and what you would do next
+\end{mycheck}
+
+\newpage
+{\LARGE\bfseries\color{accent} Appendix: PowerShell Quick Reference}\\[2pt]
+\textit{Replace names, paths, and IPs with your own. Run PowerShell as Administrator. Test commands in your lab before using them in competition.}
+
+\section*{Accounts}
+{\footnotesize
+\begin{verbatim}
+Get-LocalUser | Select Name,Enabled,PasswordExpires,PasswordRequired
+Set-LocalUser -Name bob -Password (Read-Host -AsSecureString)
+Disable-LocalUser -Name Guest
+Get-LocalGroupMember Administrators
+Remove-LocalGroupMember -Group Administrators -Member bob
+Get-ADUser -Filter * -Properties PasswordNeverExpires | Where PasswordNeverExpires
+Set-ADAccountPassword -Identity bob -Reset -NewPassword (Read-Host -AsSecureString)
+Get-ADGroupMember "Domain Admins"
+\end{verbatim}
+}
+
+\section*{Services and Processes}
+{\footnotesize
+\begin{verbatim}
+Get-Service W3SVC,LanmanServer,MySQL,DNS,NTDS | ft Name,Status,StartType
+Start-Service W3SVC;  Restart-Service W3SVC
+Set-Service -Name SomeSvc -StartupType Disabled
+sc.exe qc SomeSvc                       # show a service's config and binary path
+Get-Process | Sort CPU -Descending | Select -First 15
+Get-CimInstance Win32_Process | Select Name,ProcessId,ParentProcessId,CommandLine
+Get-AuthenticodeSignature C:\path\file.exe
+Get-WinEvent -FilterHashtable @{LogName='System';Level=2;StartTime=(Get-Date).AddHours(-1)}
+\end{verbatim}
+}
+
+\section*{Network and Firewall}
+{\footnotesize
+\begin{verbatim}
+Get-NetTCPConnection -State Listen | Select LocalAddress,LocalPort,OwningProcess
+Get-NetTCPConnection -State Listen | Select LocalPort,
+    @{n='Proc';e={(Get-Process -Id $_.OwningProcess).Name}}
+Get-NetTCPConnection -State Established
+Test-NetConnection 10.0.0.5 -Port 80
+Get-NetFirewallProfile | Select Name,Enabled,DefaultInboundAction,DefaultOutboundAction
+Get-NetFirewallRule -Direction Inbound -Enabled True | Select DisplayName,Action
+New-NetFirewallRule -DisplayName "Allow HTTP" -Direction Inbound -Protocol TCP `
+    -LocalPort 80 -Action Allow
+Disable-NetFirewallRule -DisplayName "Rule Name"
+Set-NetFirewallProfile -Profile Domain,Private,Public -DefaultInboundAction Block
+\end{verbatim}
+}
+
+\section*{Shares and SMB}
+{\footnotesize
+\begin{verbatim}
+New-Item -ItemType Directory C:\backup -Force     # not shared, not inside inetpub
+Get-SmbShare | Select Name,Path,Special           # ignore Special (C$, ADMIN$, IPC$)
+Get-SmbShareAccess -Name ShareName
+
+# Zip one share (use the Path from Get-SmbShare)
+Compress-Archive -Path C:\Shares\Docs -DestinationPath C:\backup\Docs.zip
+
+# Zip every non-default share, and save share names and permissions
+Get-SmbShare | Where-Object { -not $_.Special } | ForEach-Object {
+    Compress-Archive -Path $_.Path -DestinationPath "C:\backup\$($_.Name).zip" -Force
+}
+Get-SmbShare | Export-Csv C:\backup\shares.csv -NoTypeInformation
+Get-SmbShare | Get-SmbShareAccess | Export-Csv C:\backup\share-access.csv -NoTypeInformation
+
+# If zip fails (large folder or files in use), copy and keep NTFS permissions
+robocopy C:\Shares\Docs C:\backup\Docs /E /COPYALL
+
+# Restore
+Expand-Archive C:\backup\Docs.zip -DestinationPath C:\Shares
+New-SmbShare -Name Docs -Path C:\Shares\Docs       # recreate a deleted share
+
+Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+\end{verbatim}
+}
+
+\section*{IIS}
+{\footnotesize
+\begin{verbatim}
+Import-Module WebAdministration
+Get-Website;  Get-WebBinding
+Get-ChildItem IIS:\AppPools
+Start-Website "Default Web Site";  Start-WebAppPool DefaultAppPool
+icacls C:\inetpub\wwwroot              # check read permissions
+Backup-WebConfiguration -Name pre-change          # sites, bindings, app pools
+Copy-Item C:\inetpub C:\backup\inetpub -Recurse   # no space in the path
+robocopy C:\inetpub C:\backup\inetpub /E /COPYALL # alternative; keeps permissions
+iisreset
+\end{verbatim}
+}
+
+\section*{MySQL}
+{\footnotesize
+\begin{verbatim}
+Get-Command mysqldump -ErrorAction SilentlyContinue    # is it in PATH?
+# If not, check C:\Program Files\MySQL\MySQL Server 8.0\bin or C:\xampp\mysql\bin
+$bin = "C:\Program Files\MySQL\MySQL Server 8.0\bin"    # adjust to your version
+& "$bin\mysqldump.exe" -u root -p --all-databases --result-file=C:\backup\all.sql
+Get-Item C:\backup\all.sql                             # confirm it exists, not empty
+
+# Restore (PowerShell has no <, so go through cmd)
+cmd /c '"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u root -p < C:\backup\all.sql'
+mysql -u root -p -e "SELECT user,host FROM mysql.user;"
+\end{verbatim}
+}
+\noindent Use \cmd{--result-file} instead of \cmd{>} in PowerShell, which can write the dump in the wrong encoding. \cmd{-p} prompts for the password, so it stays out of your command history.
+
+\section*{DNS and Active Directory}
+{\footnotesize
+\begin{verbatim}
+Get-DnsServerZone
+Get-DnsServerResourceRecord -ZoneName corp.local
+Resolve-DnsName www.corp.local -Server 127.0.0.1
+Add-DnsServerResourceRecordA -Name www -ZoneName corp.local -IPv4Address 10.0.0.5
+Export-DnsServerZone -Name corp.local -FileName corp.local.bak
+dcdiag /q
+repadmin /replsummary
+w32tm /query /status
+Get-GPO -All | Select DisplayName,ModificationTime
+\end{verbatim}
+}
+
+\section*{Persistence Hunting}
+{\footnotesize
+\begin{verbatim}
+Get-ScheduledTask | Where State -ne Disabled | Select TaskName,TaskPath
+Get-CimInstance Win32_StartupCommand | Select Name,Command,Location
+Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Run
+Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run
+$k = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+Get-ItemProperty "$k\Image File Execution Options\*" | Where Debugger   # IFEO hijacks
+Get-CimInstance -Namespace root/subscription -ClassName __EventConsumer
+Get-Content $PROFILE.AllUsersAllHosts   # also check $PROFILE for each user
+Get-ChildItem Cert:\LocalMachine\Root | Sort NotBefore -Descending |
+    Select -First 10 Subject,Thumbprint,NotBefore
+Get-ChildItem C:\Users -Recurse -Include *.exe -Force -ErrorAction SilentlyContinue
+\end{verbatim}
+}
+
+\section*{Event Logs}
+{\footnotesize
+\begin{verbatim}
+Get-WinEvent -FilterHashtable @{LogName='Security';Id=4625} -MaxEvents 20   # failed logins
+Get-WinEvent -FilterHashtable @{LogName='Security';Id=4624} -MaxEvents 20   # successful logins
+\end{verbatim}
+}
+
+\section*{Advanced}
+{\footnotesize
+\begin{verbatim}
+# Enable PPL for LSASS (reboot required; test in your lab first)
+Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\Lsa -Name RunAsPPL -Value 1 -Type DWord
+sconfig                                 # Server Core configuration menu
+\end{verbatim}
+}
+
+\vfill
+\small\textit{Tip: practice in a lab (Windows Server VM with IIS, SMB, DNS, MySQL; break one thing at a time, then fix it) until you can run this routine from memory, and prefer PowerShell over clicking through the GUI. Time yourself on Sections 0--4 and 7.}
+
+\end{document}
